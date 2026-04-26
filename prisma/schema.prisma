@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                  String   @id @default(cuid())
+  email               String   @unique
+  password            String   
+  btcWallet           String?  @unique
+  orders              Order[]
+  apiKeys             ApiKey[]
+  
+  // Fitur baru: Mencatat apakah user sudah pakai jatah 1x gratis tambah/ganti API
+  freeKeyActionUsed   Boolean  @default(false) 
+  
+  createdAt           DateTime @default(now())
+}
+
+model Order {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  
+  // Fitur baru: Mencatat jenis paket yang dibeli
+  planType      String   // Contoh: "1_MONTH", "3_MONTHS", "1_YEAR", "RENEWAL", "EXTRA_KEY"
+  
+  usdAmount     Float    
+  btcAmount     Float    
+  
+  // FIX PENTING: @unique Dihapus agar semua order bisa memakai alamat BTC admin yang sama
+  btcAddress    String   
+  
+  status        String   @default("PENDING") 
+  
+  // Fitur baru: Jika user memperpanjang API, kita simpan ID API yang diperpanjang di sini
+  targetKeyId   String?  
+  
+  createdAt     DateTime @default(now())
+}
+
+model ApiKey {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  
+  // Fitur baru: Nama API Key agar user bisa membedakan API 1 dan API 2 miliknya
+  name          String   @default("Main API Key")
+  
+  encryptedKey  String   
+  iv            String   
+  authTag       String   
+  isActive      Boolean  @default(true)
+  
+  // Fitur baru yang paling penting: Masa aktif (Billing) per API Key
+  expiresAt     DateTime 
+  
+  createdAt     DateTime @default(now())
+}
