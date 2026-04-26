@@ -7,7 +7,7 @@ export const metadata = {
   description: 'API Agent khusus untuk menulis artikel blog SEO lengkap dengan gambar secara otomatis.',
 };
 
-export default function RootLayout({ children }) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="id">
       <body className="bg-black text-white min-h-screen flex flex-col antialiased selection:bg-orange-500 selection:text-white">
