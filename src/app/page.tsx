@@ -11,7 +11,7 @@ import CheckoutProcess from '../components/CheckoutProcess';
 export default function LandingPage() {
   const [step, setStep] = useState(1); 
   const [loading, setLoading] = useState(false);
-  const [order, setOrder] = useState(null);
+  const [order, setOrder] = useState<any>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userId, setUserId] = useState(null);
   const [userWallet, setUserWallet] = useState(null); 
