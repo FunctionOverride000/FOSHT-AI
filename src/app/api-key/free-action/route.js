@@ -1,7 +1,7 @@
-import prisma from '../../../../lib/prisma';
+import prisma from '../../../lib/prisma';
 import { cookies } from 'next/headers';
 import jwt from 'jsonwebtoken';
-import { generateRandomApiKey, encryptApiKey } from '../../../../lib/encryption';
+import { generateRandomApiKey, encryptApiKey } from '../../../lib/encryption';
 
 export async function POST(req) {
   try {
