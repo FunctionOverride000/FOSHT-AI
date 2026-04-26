@@ -1,7 +1,8 @@
+'use client';
 import { useState } from 'react';
 
-export default function WalletSettings({ profile, onUpdate }: { profile: unknown, onUpdate: () => void }) {
-  const [wallet, setWallet] = useState(profile?.btcWallet || '');
+export default function WalletSettings({ profile, onUpdate }: { profile: any, onUpdate: () => void }) {
+  const [wallet, setWallet] = useState(profile?.btcWallet || profile?.walletAddress || '');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -10,27 +11,31 @@ export default function WalletSettings({ profile, onUpdate }: { profile: unknown
       alert('Error: Wallet address and Password are required.');
       return;
     }
+    
     setLoading(true);
+    
     try {
-      // Kita akan membuat API endpoint khusus untuk update wallet dengan verifikasi password nanti
       const res = await fetch('/api/profile/update-wallet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ newWallet: wallet, password: password })
+        // PERBAIKAN DI SINI: Ubah 'newWallet' menjadi 'wallet' agar cocok dengan API
+        body: JSON.stringify({ wallet: wallet, password: password })
       });
+      
       const data = await res.json();
       
       if (data.success) {
-        alert('Success: Bitcoin wallet securely updated.');
-        setPassword('');
-        onUpdate();
+        alert('✅ Success: Bitcoin wallet securely updated.');
+        setPassword(''); // Kosongkan password demi keamanan
+        onUpdate(); // Panggil ulang data profil terbaru
       } else {
         alert('Security Error: ' + data.error);
       }
     } catch (err) {
       alert('Network Error.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
