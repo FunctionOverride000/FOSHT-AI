@@ -42,12 +42,11 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'Password salah! Perubahan ditolak untuk keamanan.' }, { status: 403 });
     }
 
-    // 6. SIMPAN WALLET BARU
-    // Catatan: Jika nama kolom di schema.prisma Anda bukan 'walletAddress' (misal: 'btcWallet'), silakan diubah di bawah ini
+// 6. SIMPAN WALLET BARU
     await prisma.user.update({
       where: { id: userId },
       data: {
-        walletAddress: wallet 
+        btcWallet: wallet // <--- Ganti dengan btcWallet
       }
     });
 
