@@ -200,7 +200,7 @@ export default function DocsPage() {
                 <tbody>
                   <ParamRow name="topic" type="string" req={true} desc="Topik utama atau judul artikel yang ingin ditulis oleh AI (Contoh: 'Strategi Marketing 2026')." />
                   <ParamRow name="keywords" type="string" req={false} desc="Kata kunci LSI/SEO yang dipisahkan dengan koma untuk disisipkan secara natural ke dalam artikel." />
-                  <ParamRow name="clientCustomPrompt" type="string" req={false} desc={<span><strong>[Headless Mode]</strong> Timpa persona AI default. Berguna jika Anda ingin mengubah gaya bahasa (Misal: <i>"Tulis layaknya jurnalis Bloomberg"</i>). Jika kosong, sistem menggunakan pengaturan di Dashboard.</span>} />
+                  <ParamRow name="clientCustomPrompt" type="string" req={false} desc={<span><strong>[Headless Mode]</strong> Timpa persona AI default. Berguna jika Anda ingin mengubah gaya bahasa (Misal: <i>&quot;Tulis layaknya jurnalis Bloomberg&quot;</i>). Jika kosong, sistem menggunakan pengaturan di Dashboard.</span>} />
                   <ParamRow name="clientCustomCss" type="string" req={false} desc={<span><strong>[Headless Mode]</strong> Masukkan kode CSS kustom murni (tanpa tag style) yang akan di-<i>inject</i> ke dalam hasil HTML.</span>} />
                 </tbody>
               </table>
