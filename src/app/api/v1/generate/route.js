@@ -1,13 +1,34 @@
 import prisma from '../../../../lib/prisma';
 import { decryptApiKey } from '../../../../lib/encryption';
 
-// KITA TIDAK LAGI MENGGUNAKAN AXIOS
+// Fungsi OPTIONS sangat penting untuk "menjawab" izin dari browser klien (Preflight Request)
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*', // Mengizinkan akses dari semua domain (termasuk file lokal)
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    },
+  });
+}
 
 export async function POST(req) {
+  // Setup Header CORS dasar untuk digunakan di setiap response
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Content-Type': 'application/json',
+  };
+
   try {
     const authHeader = req.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return Response.json({ success: false, error: 'Unauthorized: Invalid or missing API Key.' }, { status: 401 });
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'Unauthorized: API Key missing.' 
+      }), { status: 401, headers: corsHeaders });
     }
 
     const providedKey = authHeader.split(' ')[1];
@@ -27,10 +48,13 @@ export async function POST(req) {
     }
 
     if (!validKeyRecord) {
-      return Response.json({ success: false, error: 'API Key tidak valid.' }, { status: 401 });
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'API Key tidak valid.' 
+      }), { status: 401, headers: corsHeaders });
     }
 
-    // 2. AMBIL PENGATURAN DARI DASHBOARD (DATABASE)
+    // 2. AMBIL PENGATURAN DARI DASHBOARD
     const userConfig = await prisma.user.findUnique({ 
       where: { id: validKeyRecord.userId } 
     });
@@ -42,8 +66,13 @@ export async function POST(req) {
     let wordLimit = planName.includes('3_MONTHS') ? "2000" : "800";
 
     const body = await req.json();
-    const { topic, keywords, language = "Indonesia" } = body;
-    if (!topic) return Response.json({ success: false, error: 'Topik wajib diisi.' }, { status: 400 });
+    const { topic, keywords } = body;
+    if (!topic) {
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'Topik wajib diisi.' 
+      }), { status: 400, headers: corsHeaders });
+    }
 
     // 3. LOAD BALANCER GROQ
     const groqKeys = [
@@ -53,13 +82,9 @@ export async function POST(req) {
       process.env.GROQ_API_KEY_10, process.env.GROQ_API_KEY_11, process.env.GROQ_API_KEY_12
     ].filter(Boolean);
 
-    if (groqKeys.length === 0) {
-      return Response.json({ success: false, error: 'Sistem Maintenance.' }, { status: 500 });
-    }
-
     const activeGroqKey = groqKeys[Math.floor(Math.random() * groqKeys.length)];
 
-    // 4. PABRIK TEKS AI (SEKARANG MENGGUNAKAN NATIVE FETCH - SANGAT STABIL)
+    // 4. GENERATE TEKS (FETCH)
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -76,43 +101,35 @@ export async function POST(req) {
       })
     });
 
-    if (!groqResponse.ok) {
-       throw new Error(`Koneksi Groq Gagal: Server menolak request.`);
-    }
-
     const groqData = await groqResponse.json();
-    
-    // 5. PEMBERSIHAN MARKDOWN & SUNTIK CSS
     let rawHtml = groqData.choices[0].message.content;
     rawHtml = rawHtml.replace(/```html/g, '').replace(/```/g, '');
     
+    // 5. SUNTIK CSS
     const finalStyledHtml = `
-      <style>
-        /* CSS dari Dashboard Anda */
-        ${customCss}
-      </style>
-      <div class="fosht-article">
-        ${rawHtml}
-      </div>
+      <style>${customCss}</style>
+      <div class="fosht-article">${rawHtml}</div>
     `;
 
-    // 6. PABRIK GAMBAR
+    // 6. GENERATE GAMBAR
     const encodedPrompt = encodeURIComponent(`high resolution digital art for blog about ${topic}, clean, no text`);
     const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}`;
 
-    // 7. HASIL FINAL KEMBALI KE KLIEN
-    return Response.json({
+    // 7. RESPONSE SUKSES DENGAN CORS
+    return new Response(JSON.stringify({
       success: true,
       data: {
         plan: planName, 
         featuredImage: imageUrl, 
         contentHtml: finalStyledHtml 
       }
-    });
+    }), { status: 200, headers: corsHeaders });
 
   } catch (error) {
-    const realError = error?.message || "Unknown error";
-    console.error("FOSHT Internal Error DETIL:", realError);
-    return Response.json({ success: false, error: `Sistem Crash: ${realError}` }, { status: 500 });
+    console.error("FOSHT Internal Error:", error?.message);
+    return new Response(JSON.stringify({ 
+      success: false, 
+      error: `Sistem Crash: ${error.message}` 
+    }), { status: 500, headers: corsHeaders });
   }
 }
