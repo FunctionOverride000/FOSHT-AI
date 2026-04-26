@@ -1,4 +1,21 @@
-export default function ApiKeysList({ keys }: { keys: any[] }) {
+'use client';
+
+// 1. BUKU PANDUAN TYPESCRIPT
+// Ini memberi tahu TS apa saja isi di dalam satu buah kotak API Key
+type ApiKeyObj = {
+  id: string;
+  name: string;
+  expiresAt: string | Date;
+  decryptedKey?: string;
+  key?: string;
+  apiKey?: string;
+  token?: string;
+  value?: string;
+  [key: string]: unknown; // Mengizinkan properti ekstra
+};
+
+// 2. KITA GUNAKAN BUKU PANDUAN TADI KE DALAM ARRAY (ApiKeyObj[])
+export default function ApiKeysList({ keys }: { keys: ApiKeyObj[] }) {
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     alert('API Key copied to clipboard!');
@@ -8,17 +25,20 @@ export default function ApiKeysList({ keys }: { keys: any[] }) {
     return (
       <div className="border border-dashed border-white/10 rounded-xl p-10 text-center flex flex-col items-center justify-center">
         <span className="text-4xl mb-3 opacity-50">🔑</span>
-        <p className="text-gray-500">You don't have any active API Keys yet.</p>
+        <p className="text-gray-500">You don&apos;t have any active API Keys yet.</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      {keys.map((keyObj: unknown) => {
+      {/* 3. KITA HAPUS KATA ': unknown' DI SINI */}
+      {/* TS sekarang otomatis tahu bahwa keyObj adalah bagian dari ApiKeyObj */}
+      {keys.map((keyObj) => {
         const isExpired = new Date(keyObj.expiresAt) < new Date();
+        
         // Jaring penangkap nama variabel dari database agar tidak kosong
-        const rawKey = keyObj.decryptedKey || keyObj.key || keyObj.apiKey || keyObj.token || keyObj.value;
+        const rawKey = keyObj.decryptedKey || keyObj.key || keyObj.apiKey || keyObj.token || keyObj.value || "";
 
         return (
           <div key={keyObj.id} className={`p-5 rounded-xl border ${isExpired ? 'bg-red-500/5 border-red-500/20' : 'bg-[#111] border-white/10 shadow-lg'}`}>

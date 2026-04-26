@@ -1,6 +1,16 @@
+'use client';
 import { useState } from 'react';
 
-export default function AgentSettings({ profile }: { profile: any }) {
+// BUKU PANDUAN TYPESCRIPT (Menghilangkan garis merah pada profile)
+type AgentProfile = {
+  id: string;
+  systemPrompt?: string;
+  blogCss?: string;
+  [key: string]: unknown; // Cara yang benar untuk mengizinkan data lain
+};
+
+// GANTI 'any' DENGAN 'AgentProfile'
+export default function AgentSettings({ profile }: { profile: AgentProfile }) {
   const defaultPrompt = "You are an expert Tech Journalist. Write highly engaging, factual, and professional SEO content.";
   const defaultCss = "h1 { color: #f97316; font-size: 2.2em; font-weight: 900; margin-bottom: 0.5em; }\nh2 { color: #ffffff; font-size: 1.5em; margin-top: 1.5em; border-bottom: 2px solid #f97316; padding-bottom: 0.2em; }\np { color: #d1d5db; line-height: 1.8; margin-bottom: 1em; }\nul { color: #d1d5db; margin-left: 1.5em; list-style-type: disc; }";
 
@@ -8,7 +18,6 @@ export default function AgentSettings({ profile }: { profile: any }) {
   const [cssCode, setCssCode] = useState(profile?.blogCss || defaultCss);
   const [saving, setSaving] = useState(false);
   
-  // State untuk Input Topik Preview yang baru
   const [previewTopic, setPreviewTopic] = useState("Cara Budidaya Ikan Cupang"); 
   const [previewHtml, setPreviewHtml] = useState("<h1>Preview Mode</h1><p>Ketik topik uji coba di bawah, lalu klik 'Generate Live Preview'.</p>");
   const [generating, setGenerating] = useState(false);
@@ -35,7 +44,6 @@ export default function AgentSettings({ profile }: { profile: any }) {
       const res = await fetch('/api/profile/test-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Kirim Topik ke Mesin API!
         body: JSON.stringify({ systemPrompt: prompt, testTopic: previewTopic }) 
       });
       
@@ -73,7 +81,6 @@ export default function AgentSettings({ profile }: { profile: any }) {
           />
         </div>
 
-        {/* KOLOM INPUT TOPIK UJI COBA BARU */}
         <div className="bg-black/50 p-4 rounded-xl border border-white/5">
           <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Topik Uji Coba</label>
           <input 

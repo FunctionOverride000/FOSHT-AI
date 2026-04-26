@@ -8,13 +8,25 @@ import FeatureSection from '../components/FeatureSection';
 import PricingSection from '../components/PricingSection';
 import CheckoutProcess from '../components/CheckoutProcess';
 
+// BUKU PANDUAN TYPESCRIPT (Menggantikan <any>)
+type OrderData = {
+  id: string;
+  btcAmount?: number;
+  btcAddress?: string;
+  status?: string;
+  [key: string]: unknown; // Mengizinkan properti tambahan jika ada
+};
+
 export default function LandingPage() {
   const [step, setStep] = useState(1); 
   const [loading, setLoading] = useState(false);
-  const [order, setOrder] = useState<any>(null);
+  
+  // PERBAIKAN DI SINI: Mengganti <any> menjadi <OrderData | null>
+  const [order, setOrder] = useState<OrderData | null>(null);
+  
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userId, setUserId] = useState(null);
-  const [userWallet, setUserWallet] = useState(null); 
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userWallet, setUserWallet] = useState<string | null>(null); 
   const router = useRouter();
 
   // Logika Cek Login
@@ -36,7 +48,7 @@ export default function LandingPage() {
   // Logika Scanner Blockchain
   useEffect(() => {
     let interval: string | number | NodeJS.Timeout | undefined;
-    if (step === 2 && order) {
+    if (step === 2 && order && order.id) {
       interval = setInterval(async () => {
         const res = await fetch('/api/verify', {
           method: 'POST',
@@ -54,7 +66,8 @@ export default function LandingPage() {
   }, [step, order]);
 
   // Logika Tombol Beli
-  const handleBuy = async (plan: { id: any; }) => {
+  // PERBAIKAN DI SINI: Memberi tipe yang lebih aman untuk parameter 'plan'
+  const handleBuy = async (plan: { id: string | number; [key: string]: unknown }) => {
     if (!isLoggedIn) { 
       router.push('/login'); 
       return; 

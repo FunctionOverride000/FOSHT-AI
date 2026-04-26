@@ -1,7 +1,17 @@
 'use client';
 import { useState } from 'react';
 
-export default function WalletSettings({ profile, onUpdate }: { profile: any, onUpdate: () => void }) {
+// INI ADALAH BAGIAN YANG KURANG SEBELUMNYA (Buku Panduan TypeScript)
+// Tanpa ini, kata 'UserProfile' di bawah akan tetap bergaris merah.
+type UserProfile = {
+  email?: string;
+  btcWallet?: string;
+  walletAddress?: string;
+  [key: string]: unknown;
+};
+
+// FUNGSI UTAMA KOMPONEN
+export default function WalletSettings({ profile, onUpdate }: { profile: UserProfile, onUpdate: () => void }) {
   const [wallet, setWallet] = useState(profile?.btcWallet || profile?.walletAddress || '');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -18,7 +28,7 @@ export default function WalletSettings({ profile, onUpdate }: { profile: any, on
       const res = await fetch('/api/profile/update-wallet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // PERBAIKAN DI SINI: Ubah 'newWallet' menjadi 'wallet' agar cocok dengan API
+        // Pastikan kurir mengirimkan nama payload 'wallet', bukan 'newWallet'
         body: JSON.stringify({ wallet: wallet, password: password })
       });
       
