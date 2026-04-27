@@ -5,6 +5,13 @@ import Footer from '../components/Footer';
 export const metadata = {
   title: 'FOSHT AI - Automasi Blog Berbasis API',
   description: 'API Agent khusus untuk menulis artikel blog SEO lengkap dengan gambar secara otomatis.',
+  
+  // PERBAIKAN DI SINI: Menambahkan logo untuk Favicon & Apple Touch Icon
+  icons: {
+    icon: '/img/fosht.png',      // Logo standar di tab browser
+    shortcut: '/img/fosht.png',  // Shortcut icon
+    apple: '/img/fosht.png',     // Logo saat website di-save ke Home Screen iOS
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

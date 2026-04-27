@@ -4,20 +4,27 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  // directUrl = env("DIRECT_URL") // Buka komen ini jika Neon/Supabase Anda butuh direct URL
 }
 
 model User {
-  id                  String   @id @default(cuid())
-  email               String   @unique
-  password            String   
-  btcWallet           String?  @unique
-  orders              Order[]
-  apiKeys             ApiKey[]
+  id                String    @id @default(cuid())
+  email             String    @unique
   
-  // Fitur baru: Mencatat apakah user sudah pakai jatah 1x gratis tambah/ganti API
-  freeKeyActionUsed   Boolean  @default(false) 
+  // Dibuat opsional (?) agar nanti bisa Login pakai Google/GitHub tanpa error
+  password          String?   
   
-  createdAt           DateTime @default(now())
+  // Sistem Keamanan Ekstra
+  pin               String?   // Security PIN 6-Digit
+  resetOtp          String?   // Menyimpan kode OTP 6-Digit
+  otpExpiry         DateTime? // Batas waktu OTP (misal: 10 menit)
+  
+  btcWallet         String?   @unique
+  freeKeyActionUsed Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+
+  orders            Order[]
+  apiKeys           ApiKey[]
 }
 
 model Order {
@@ -25,20 +32,18 @@ model Order {
   userId        String
   user          User     @relation(fields: [userId], references: [id])
   
-  // Fitur baru: Mencatat jenis paket yang dibeli
-  planType      String   // Contoh: "1_MONTH", "3_MONTHS", "1_YEAR", "RENEWAL", "EXTRA_KEY"
+  planType      String   // "1_MONTH", "3_MONTHS", "1_YEAR", "RENEWAL", "EXTRA_KEY"
   
   usdAmount     Float    
   btcAmount     Float    
-  
-  // FIX PENTING: @unique Dihapus agar semua order bisa memakai alamat BTC admin yang sama
   btcAddress    String   
   
-  status        String   @default("PENDING") 
+  status        String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
   
-  // Fitur baru: Jika user memperpanjang API, kita simpan ID API yang diperpanjang di sini
+  // TAMBAHAN: Menyimpan Bukti Transfer Blockchain (Transaction Hash) setelah sukses
+  txHash        String?  @unique
+  
   targetKeyId   String?  
-  
   createdAt     DateTime @default(now())
 }
 
@@ -47,16 +52,12 @@ model ApiKey {
   userId        String
   user          User     @relation(fields: [userId], references: [id])
   
-  // Fitur baru: Nama API Key agar user bisa membedakan API 1 dan API 2 miliknya
   name          String   @default("Main API Key")
-  
   encryptedKey  String   
   iv            String   
   authTag       String   
   isActive      Boolean  @default(true)
   
-  // Fitur baru yang paling penting: Masa aktif (Billing) per API Key
   expiresAt     DateTime 
-  
   createdAt     DateTime @default(now())
 }

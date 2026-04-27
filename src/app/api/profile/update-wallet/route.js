@@ -1,16 +1,17 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import jwt from 'jsonwebtoken';
-import bcrypt from 'bcryptjs';
-import prisma from '../../../../lib/prisma';
+import prisma from '../../../../lib/prisma'; // Pastikan path ini benar sesuai struktur folder Anda
 
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { wallet, password } = body;
+    
+    // PERUBAHAN: Menangkap 'pin', bukan lagi 'password'
+    const { wallet, pin } = body;
 
-    if (!wallet || !password) {
-      return NextResponse.json({ success: false, error: 'Alamat Wallet dan Password wajib diisi.' }, { status: 400 });
+    if (!wallet || !pin) {
+      return NextResponse.json({ success: false, error: 'Alamat Wallet dan Security PIN wajib diisi.' }, { status: 400 });
     }
 
     // 1. Cek Token Login
@@ -34,11 +35,18 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'User tidak ditemukan.' }, { status: 404 });
     }
 
-    // 4. Verifikasi Password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    
-    if (!isPasswordValid) {
-      return NextResponse.json({ success: false, error: 'Password salah! Perubahan ditolak.' }, { status: 403 });
+    // 4. Verifikasi Security PIN
+    // Cek apakah user sudah pernah membuat PIN
+    if (!user.pin) {
+      return NextResponse.json({ 
+        success: false, 
+        error: 'Anda belum mengatur PIN. Silakan klik "Forgot PIN" untuk membuat PIN baru via Email.' 
+      }, { status: 403 });
+    }
+
+    // Cek kecocokan PIN (Berdasarkan kode sebelumnya, PIN disimpan sebagai teks biasa)
+    if (user.pin !== pin) {
+      return NextResponse.json({ success: false, error: 'Security PIN salah! Perubahan ditolak.' }, { status: 403 });
     }
 
     // 5. Update Wallet dengan proteksi Error Prisma

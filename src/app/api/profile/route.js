@@ -42,6 +42,7 @@ export async function GET(req) {
       userId: user.id,
       email: user.email,
       btcWallet: user.btcWallet,
+      hasPin: !!user.pin,
       freeKeyUsed: user.freeKeyActionUsed,
       apiKeys: processedKeys
     });
