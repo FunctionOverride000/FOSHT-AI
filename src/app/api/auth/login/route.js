@@ -8,10 +8,10 @@ export async function POST(req) {
     const { email, password } = await req.json();
 
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return Response.json({ success: false, error: 'Email tidak ditemukan' }, { status: 404 });
+    if (!user) return Response.json({ success: false, error: 'Email not found' }, { status: 404 });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return Response.json({ success: false, error: 'Password salah' }, { status: 401 });
+    if (!isMatch) return Response.json({ success: false, error: 'wrong password' }, { status: 401 });
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
@@ -24,9 +24,9 @@ export async function POST(req) {
       path: '/',
     });
 
-    return Response.json({ success: true, message: 'Login berhasil' });
+    return Response.json({ success: true, message: 'Login successful' });
   } catch (error) {
     console.error(error);
-    return Response.json({ success: false, error: 'Terjadi kesalahan server' }, { status: 500 });
+    return Response.json({ success: false, error: 'An error occurred on the server' }, { status: 500 });
   }
 }
