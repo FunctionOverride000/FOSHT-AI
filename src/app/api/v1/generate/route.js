@@ -1,7 +1,10 @@
 import prisma from '../../../../lib/prisma';
 import { decryptApiKey } from '../../../../lib/encryption';
 
-// Header CORS dasar
+/**
+ * ── KONFIGURASI CORS ──
+ * Memastikan API bisa dipanggil dari domain mana pun (Cross-Origin).
+ */
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -20,12 +23,15 @@ export async function POST(req) {
   try {
     const authHeader = req.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ success: false, error: 'Unauthorized: API Key missing.' }), { status: 401, headers: corsHeaders });
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'Unauthorized: API Key tidak tersedia.' 
+      }), { status: 401, headers: corsHeaders });
     }
 
     const providedKey = authHeader.split(' ')[1];
 
-    // 1. GATEKEEPER & DEKRIPSI
+    // 1. VALIDASI & DEKRIPSI API KEY
     const allKeys = await prisma.apiKey.findMany({ where: { isActive: true } });
     let validKeyRecord = null;
 
@@ -40,24 +46,35 @@ export async function POST(req) {
     }
 
     if (!validKeyRecord) {
-      return new Response(JSON.stringify({ success: false, error: 'API Key tidak valid.' }), { status: 401, headers: corsHeaders });
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'API Key tidak valid atau telah dinonaktifkan.' 
+      }), { status: 401, headers: corsHeaders });
     }
 
-    // 2. AMBIL PENGATURAN USER
-    const userConfig = await prisma.user.findUnique({ where: { id: validKeyRecord.userId } });
-    const customPrompt = userConfig?.systemPrompt || "You are an expert SEO Writer. Write pure HTML.";
-    const customCss = userConfig?.blogCss || "";
+    // 2. AMBIL KONFIGURASI USER DARI DATABASE
+    const userConfig = await prisma.user.findUnique({ 
+      where: { id: validKeyRecord.userId } 
+    });
 
     const body = await req.json();
     const { topic, keywords } = body;
+
     if (!topic) {
-      return new Response(JSON.stringify({ success: false, error: 'Topik wajib diisi.' }), { status: 400, headers: corsHeaders });
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'Topik artikel wajib diisi.' 
+      }), { status: 400, headers: corsHeaders });
     }
 
-    // 3. GENERATE TEKS (GROQ LOAD BALANCER)
-    const groqKeys = [
-      process.env.GROQ_API_KEY_1, process.env.GROQ_API_KEY_2, process.env.GROQ_API_KEY_3
-    ].filter(Boolean);
+    // 3. GENERATE TEKS VIA GROQ (Llama 3.1)
+    // Menggunakan System Prompt yang ketat agar HTML bersih
+    const systemPrompt = `Kamu adalah Penulis SEO FOSHT AI. 
+    ATURAN KONTEN: HANYA gunakan tag <h1>, <h2>, <p>, <ul>, <li>. 
+    DILARANG: Tag <html>, <head>, <body>, <link>, <script>, atau <style>. 
+    Berikan output artikel yang mendalam dan profesional.`;
+
+    const groqKeys = [process.env.GROQ_API_KEY_1, process.env.GROQ_API_KEY_2].filter(Boolean);
     const activeGroqKey = groqKeys[Math.floor(Math.random() * groqKeys.length)];
 
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -69,19 +86,20 @@ export async function POST(req) {
       body: JSON.stringify({
         model: 'llama-3.1-8b-instant',
         messages: [
-          { role: 'system', content: customPrompt }, 
-          { role: 'user', content: `Tulis artikel blog HTML murni tentang ${topic}. Kata kunci: ${keywords}. Gunakan tag <h1>, <h2>, <p>. JANGAN gunakan tag markdown.` }
+          { role: 'system', content: systemPrompt }, 
+          { role: 'user', content: `Tulis artikel HTML murni tentang: ${topic}. Keywords: ${keywords || 'umum'}.` }
         ],
         temperature: 0.7,
       })
     });
 
     const groqData = await groqResponse.json();
-    const rawHtml = groqData.choices[0].message.content.replace(/```html/g, '').replace(/```/g, '');
+    let cleanHtml = groqData.choices[0].message.content;
+    // Membersihkan jika AI masih nakal memberikan tag markdown atau tag head
+    cleanHtml = cleanHtml.replace(/```html/g, '').replace(/```/g, '').replace(/<head>[\s\S]*?<\/head>/gi, '').replace(/<link[^>]*>/gi, '');
 
-    // 4. GENERATE GAMBAR (GETIMG.AI)
-    // Menggunakan GETIMG_API_KEY_1 untuk kualitas gambar premium
-    let imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(topic)}?nologo=true`; // Fallback
+    // 4. GENERATE GAMBAR VIA GETIMG.AI (Premium)
+    let imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(topic)}?nologo=true`; // Fallback ke Pollinations
 
     try {
       const getImgKey = process.env.GETIMG_API_KEY_1;
@@ -94,7 +112,7 @@ export async function POST(req) {
             'Accept': 'application/json',
           },
           body: JSON.stringify({
-            prompt: `Professional cinematic digital art for a blog post about ${topic}, highly detailed, clean composition, 4k resolution, no text`,
+            prompt: `Cinematic professional digital art for blog header about ${topic}, detailed, 4k, clean composition, no text overlay`,
             style: 'digital-art',
             output_format: 'webp',
             width: 1024,
@@ -104,25 +122,27 @@ export async function POST(req) {
         
         const imgData = await imgResponse.json();
         if (imgData.image) {
-          // getimg.ai mengembalikan base64. Kita kirim sebagai Data URL.
           imageUrl = `data:image/webp;base64,${imgData.image}`;
         }
       }
     } catch (imgError) {
-      console.error("GetImg API Error:", imgError.message);
+      console.error("GetImg API Gagal:", imgError.message);
     }
 
-    // 5. RESPONSE FINAL
+    // 5. RESPONSE FINAL (MATANG & SIAP PAKAI)
     return new Response(JSON.stringify({
       success: true,
       data: {
-        plan: validKeyRecord.name,
+        plan: validKeyRecord.name, 
         featuredImage: imageUrl, 
-        contentHtml: `<style>${customCss}</style><div class="fosht-article">${rawHtml}</div>`
+        contentHtml: `<div class="fosht-article">${cleanHtml}</div>` 
       }
     }), { status: 200, headers: corsHeaders });
 
   } catch (error) {
-    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: corsHeaders });
+    return new Response(JSON.stringify({ 
+      success: false, 
+      error: `Internal Server Error: ${error.message}` 
+    }), { status: 500, headers: corsHeaders });
   }
 }
