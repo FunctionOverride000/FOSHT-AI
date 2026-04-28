@@ -35,6 +35,7 @@ async function callGroq({ messages, model = 'llama-3.3-70b-versatile', useJsonFo
         max_tokens: 4096,
       };
 
+      // compound-beta TIDAK support response_format — jangan dipaksa
       if (useJsonFormat && !model.includes('compound')) {
         body.response_format = { type: 'json_object' };
       }
@@ -50,11 +51,13 @@ async function callGroq({ messages, model = 'llama-3.3-70b-versatile', useJsonFo
 
       const data = await res.json();
 
+      // Handle rate limit — coba key berikutnya
       if (res.status === 429 || res.status === 503) {
         console.warn(`[GROQ] Key #${idx + 1} rate limited (${res.status}), trying next...`);
         continue;
       }
 
+      // Handle error dari Groq
       if (data.error) {
         console.warn(`[GROQ] Key #${idx + 1} error: ${data.error.message}`);
         if (data.error.code === 'model_not_active' || data.error.type === 'invalid_request_error') {
@@ -119,7 +122,7 @@ REQUIRED OUTPUT FORMAT (strict JSON, no extra text):
   "key_facts": ["fact 1 with context", "fact 2", "fact 3", "fact 4", "fact 5"],
   "latest_trends": ["trend 1", "trend 2", "trend 3"],
   "statistics": ["stat with real number 1", "stat 2", "stat 3"],
-  "image_flux_prompt": "Deskripsi visual SANGAT DETAIL dalam Bahasa Indonesia yang menggambarkan isi blog, latar belakang futuristik/sinematik, sesuai topik. Contoh untuk 'restoran vegan jakarta': 'Hidangan vegan segar dan berwarna-warni di atas meja kayu elegan, restoran modern Jakarta, pencahayaan hangat sinematik, fotografi editorial profesional'",
+  "image_search_keyword": "WAJIB: 4-6 kata bahasa Inggris SANGAT SPESIFIK ke topik (contoh 'restoran vegan jakarta' -> 'vegan food jakarta restaurant plate'), BUKAN kata umum seperti 'city', 'space', 'abstract', 'technology'",
   "seo_title": "SEO-optimized blog title max 60 chars",
   "meta_description": "SEO meta description max 160 chars",
   "slug": "url-friendly-slug"
@@ -205,29 +208,14 @@ Return only JSON: {"html": "..."}`,
   return extractJson(result.content);
 }
 
-// ── GENERATE GAMBAR ──
-// Prioritas: Pollinations Flux (utama) → GetImg → Unsplash → Pexels → Pollinations default
-async function generateImage(fluxPrompt, topic = '') {
-  const base = fluxPrompt || topic || 'teknologi futuristik modern';
-  const cleanPrompt = base.substring(0, 200);
+// ── GENERATE GAMBAR (GetImg 12 key → Unsplash → Pexels → Pollinations) ──
+async function generateImage(keyword, topic = '') {
+  const base = keyword || topic || 'professional blog cover';
+  const cleanKeyword = base.substring(0, 80);
+  const imagePrompt = `${cleanKeyword}, professional photography, high quality, editorial style, 4k, bright natural lighting`;
+  const negativePrompt = 'space, galaxy, earth, abstract, dark, cartoon, anime, low quality, blurry, watermark, text';
 
-  // ── UTAMA: POLLINATIONS FLUX (sama persis dengan fosht.vercel.app/blog/fosht-blog) ──
-  try {
-    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-      `${cleanPrompt}, dark background, cyan neon accent, cinematic lighting, ultra detailed, 16:9 aspect ratio`
-    )}?width=1200&height=630&nologo=true&model=flux&seed=${Date.now()}`;
-
-    // Verifikasi URL bisa diakses
-    const check = await fetch(pollinationsUrl, { method: 'HEAD', signal: AbortSignal.timeout(8000) });
-    if (check.ok || check.status === 200) {
-      console.log('[FOSHT] ✓ Image from Pollinations Flux');
-      return pollinationsUrl;
-    }
-  } catch (e) {
-    console.warn('[FOSHT] Pollinations Flux failed:', e.message);
-  }
-
-  // ── FALLBACK 1: GETIMG (coba semua 12 key) ──
+  // ── COBA SEMUA GETIMG KEYS (1 → 12) ──
   const getimgKeys = getGetImgKeys();
   for (let i = 0; i < getimgKeys.length; i++) {
     try {
@@ -239,8 +227,8 @@ async function generateImage(fluxPrompt, topic = '') {
           Accept: 'application/json',
         },
         body: JSON.stringify({
-          prompt: `${cleanPrompt}, cinematic lighting, ultra detailed, professional, 4k`,
-          negative_prompt: 'low quality, blurry, watermark, text overlay, cartoon, anime',
+          prompt: imagePrompt,
+          negative_prompt: negativePrompt,
           style: 'photorealism',
           width: 1216,
           height: 832,
@@ -259,13 +247,12 @@ async function generateImage(fluxPrompt, topic = '') {
     }
   }
 
-  // ── FALLBACK 2: UNSPLASH ──
+  // ── FALLBACK 1: UNSPLASH ──
   try {
     const unsplashKey = process.env.UNSPLASH_ACCESS_KEY;
     if (unsplashKey) {
-      const keyword = topic.substring(0, 50);
       const res = await fetch(
-        `https://api.unsplash.com/photos/random?query=${encodeURIComponent(keyword)}&orientation=landscape&content_filter=high`,
+        `https://api.unsplash.com/photos/random?query=${encodeURIComponent(cleanKeyword)}&orientation=landscape&content_filter=high`,
         { headers: { Authorization: `Client-ID ${unsplashKey}` } }
       );
       const data = await res.json();
@@ -278,13 +265,12 @@ async function generateImage(fluxPrompt, topic = '') {
     console.warn('[FOSHT] Unsplash failed:', e.message);
   }
 
-  // ── FALLBACK 3: PEXELS ──
+  // ── FALLBACK 2: PEXELS ──
   try {
     const pexelsKey = process.env.PEXELS_API_KEY;
     if (pexelsKey) {
-      const keyword = topic.substring(0, 50);
       const res = await fetch(
-        `https://api.pexels.com/v1/search?query=${encodeURIComponent(keyword)}&per_page=1&orientation=landscape`,
+        `https://api.pexels.com/v1/search?query=${encodeURIComponent(cleanKeyword)}&per_page=1&orientation=landscape`,
         { headers: { Authorization: pexelsKey } }
       );
       const data = await res.json();
@@ -297,9 +283,9 @@ async function generateImage(fluxPrompt, topic = '') {
     console.warn('[FOSHT] Pexels failed:', e.message);
   }
 
-  // ── LAST RESORT: POLLINATIONS tanpa model flux ──
-  console.warn('[FOSHT] All sources failed, using Pollinations default');
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=1200&height=630&nologo=true&seed=${Date.now()}`;
+  // ── FALLBACK TERAKHIR: POLLINATIONS ──
+  console.warn('[FOSHT] All image sources failed, using Pollinations');
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(imagePrompt)}?width=1200&height=630&nologo=true&seed=${Date.now()}`;
 }
 
 // ── CORS PREFLIGHT ──
@@ -390,8 +376,7 @@ export async function POST(req) {
     try {
       [blogData, imageUrl] = await Promise.all([
         writeBlog(cleanTopic, researchData, nextKeyIndex),
-        // Pakai image_flux_prompt dari research untuk gambar yang relevan
-        generateImage(researchData.image_flux_prompt, cleanTopic),
+        generateImage(researchData.image_search_keyword, cleanTopic),
       ]);
       console.log(`[FOSHT] ✓ Blog written. Image generated.`);
     } catch (e) {
