@@ -10,17 +10,19 @@ const corsHeaders = {
   'Content-Type': 'application/json',
 };
 
-// ── GROQ KEY ROTATOR (12 keys, fallback otomatis) ──
+// ── GROQ KEY ROTATOR (support hingga 12 keys) ──
 const getGroqKeys = () =>
   Array.from({ length: 12 }, (_, i) => process.env[`GROQ_API_KEY_${i + 1}`]).filter(Boolean);
 
-async function callGroq(messages, model = 'llama-3.3-70b-versatile', responseFormat = null, keyIndex = 0) {
+// ── CORE GROQ CALLER dengan fallback antar key ──
+async function callGroq({ messages, model = 'llama-3.3-70b-versatile', useJsonFormat = false, startKeyIndex = 0 }) {
   const keys = getGroqKeys();
-  if (keys.length === 0) throw new Error('No GROQ API keys configured');
+  if (keys.length === 0) throw new Error('No GROQ API keys configured in environment');
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
-    const idx = (keyIndex + attempt) % keys.length;
+    const idx = (startKeyIndex + attempt) % keys.length;
     const key = keys[idx];
+
     try {
       const body = {
         model,
@@ -28,7 +30,11 @@ async function callGroq(messages, model = 'llama-3.3-70b-versatile', responseFor
         temperature: 0.7,
         max_tokens: 4096,
       };
-      if (responseFormat) body.response_format = responseFormat;
+
+      // compound-beta TIDAK support response_format — jangan dipaksa
+      if (useJsonFormat && !model.includes('compound')) {
+        body.response_format = { type: 'json_object' };
+      }
 
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
@@ -39,120 +45,185 @@ async function callGroq(messages, model = 'llama-3.3-70b-versatile', responseFor
         body: JSON.stringify(body),
       });
 
+      const data = await res.json();
+
+      // Handle rate limit — coba key berikutnya
       if (res.status === 429 || res.status === 503) {
-        console.warn(`GROQ key #${idx + 1} rate limited, trying next...`);
+        console.warn(`[GROQ] Key #${idx + 1} rate limited (${res.status}), trying next...`);
         continue;
       }
 
-      const data = await res.json();
-      if (!data.choices?.[0]?.message?.content) throw new Error('Empty GROQ response');
-      return { content: data.choices[0].message.content, keyUsed: idx };
+      // Handle error dari Groq
+      if (data.error) {
+        console.warn(`[GROQ] Key #${idx + 1} error: ${data.error.message}`);
+        // Jika model tidak tersedia, langsung throw bukan retry
+        if (data.error.code === 'model_not_active' || data.error.type === 'invalid_request_error') {
+          throw new Error(`Model "${model}" tidak tersedia: ${data.error.message}`);
+        }
+        continue;
+      }
+
+      const content = data.choices?.[0]?.message?.content;
+      if (!content || content.trim() === '') {
+        console.warn(`[GROQ] Key #${idx + 1} returned empty content`);
+        continue;
+      }
+
+      return { content, keyUsed: idx };
     } catch (e) {
-      if (attempt === keys.length - 1) throw e;
-      console.warn(`GROQ key #${idx + 1} failed: ${e.message}`);
+      // Jika error fatal (bukan rate limit), lempar langsung
+      if (e.message.includes('tidak tersedia') || e.message.includes('model_not_active')) throw e;
+      console.warn(`[GROQ] Key #${idx + 1} threw: ${e.message}`);
+      if (attempt === keys.length - 1) throw new Error(`Semua ${keys.length} GROQ key gagal. Error terakhir: ${e.message}`);
     }
   }
-  throw new Error('All GROQ keys exhausted');
+
+  throw new Error(`Semua ${keys.length} GROQ key exhausted tanpa hasil`);
+}
+
+// ── PARSE JSON DARI TEKS (untuk model yang tidak support response_format) ──
+function extractJson(raw) {
+  // Coba parse langsung dulu
+  try { return JSON.parse(raw); } catch (_) {}
+
+  // Cari blok ```json ... ``` 
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    try { return JSON.parse(fenced[1].trim()); } catch (_) {}
+  }
+
+  // Cari objek JSON paling luar { ... }
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    try { return JSON.parse(raw.substring(firstBrace, lastBrace + 1)); } catch (_) {}
+  }
+
+  throw new Error('Tidak bisa parse JSON dari response model');
 }
 
 // ── FASE 1: RISET REAL-TIME (compound-beta = built-in web search) ──
-async function researchTopic(topic, keyIndex) {
+async function researchTopic(topic, startKeyIndex) {
   const messages = [
     {
       role: 'system',
-      content: `You are a professional research assistant. Your job is to gather REAL, CURRENT, FACTUAL information about the given topic from the web.
+      content: `You are a professional research assistant with web search capability.
+Your job: gather REAL, CURRENT, FACTUAL information about the given topic from the web.
 
 RULES:
-- Search for the latest data, statistics, trends, and facts
-- Collect at least 5 concrete data points or statistics
-- Find recent news or developments (within the last 6-12 months if possible)
-- NEVER fabricate or assume data
-- Output ONLY a JSON object, no markdown, no explanation
+- Search for latest data, statistics, trends, and facts
+- Collect at least 5 concrete data points or real statistics with numbers
+- Find recent news or developments (within last 12 months if possible)  
+- NEVER fabricate or assume any data — only use what you actually find
+- Output ONLY a valid JSON object, no markdown formatting, no explanation outside JSON
 
-OUTPUT FORMAT (strict JSON):
+REQUIRED OUTPUT FORMAT (strict JSON, no extra text):
 {
-  "topic_summary": "brief factual summary of the topic",
-  "key_facts": ["fact 1 with source context", "fact 2...", "..."],
-  "latest_trends": ["trend 1", "trend 2", "..."],
-  "statistics": ["stat 1 with number", "stat 2...", "..."],
-  "image_search_keyword": "3-5 word English visual keyword for image generation",
-  "seo_title": "SEO-optimized blog title (max 60 chars)",
-  "meta_description": "SEO meta description (max 160 chars)",
-  "slug": "url-friendly-slug-from-title"
+  "topic_summary": "brief factual summary of the topic based on real findings",
+  "key_facts": ["fact 1 with context", "fact 2", "fact 3", "fact 4", "fact 5"],
+  "latest_trends": ["trend 1", "trend 2", "trend 3"],
+  "statistics": ["stat with real number 1", "stat 2", "stat 3"],
+  "image_search_keyword": "3-5 English words for image generation",
+  "seo_title": "SEO-optimized blog title max 60 chars",
+  "meta_description": "SEO meta description max 160 chars",
+  "slug": "url-friendly-slug"
 }`,
     },
     {
       role: 'user',
-      content: `Research this blog topic thoroughly using real web data: "${topic}"`,
+      content: `Research this topic using real web data and return only JSON: "${topic}"`,
     },
   ];
 
-  // compound-beta punya built-in web search — kunci anti-halusinasi
-  const result = await callGroq(messages, 'compound-beta', { type: 'json_object' }, keyIndex);
-  return JSON.parse(result.content);
+  // compound-beta punya built-in web search — tidak support response_format
+  let result;
+  try {
+    result = await callGroq({
+      messages,
+      model: 'compound-beta',
+      useJsonFormat: false, // compound-beta tidak support ini
+      startKeyIndex,
+    });
+  } catch (e) {
+    // Fallback: gunakan llama biasa jika compound-beta tidak tersedia di akun
+    console.warn(`[FOSHT] compound-beta gagal (${e.message}), fallback ke llama-3.3-70b...`);
+    result = await callGroq({
+      messages,
+      model: 'llama-3.3-70b-versatile',
+      useJsonFormat: true,
+      startKeyIndex,
+    });
+  }
+
+  return extractJson(result.content);
 }
 
 // ── FASE 2: TULIS BLOG SEO PROFESIONAL ──
-async function writeBlog(topic, researchData, keyIndex) {
+async function writeBlog(topic, researchData, startKeyIndex) {
   const messages = [
     {
       role: 'system',
-      content: `You are a world-class SEO blog writer. Write a comprehensive, engaging, and SEO-optimized blog post based ONLY on the provided real research data.
+      content: `You are a world-class SEO blog writer. Write a comprehensive, engaging blog post based ONLY on the provided research data.
 
 WRITING RULES:
-- Use ONLY the facts and statistics provided — never invent data
-- Write in a professional yet engaging tone
-- Structure: Introduction → multiple H2 sections → Conclusion with CTA
-- Minimum 800 words, maximum 1500 words
-- Naturally integrate SEO keywords from the topic
-- Each H2 section should be 2-4 paragraphs with real data cited inline
-- Add a "Key Takeaways" section before conclusion
-- Add FAQ section at the end (3-5 questions)
+- Use ONLY facts and statistics from the research — never invent data
+- Professional yet engaging tone
+- Structure: Introduction → H2 sections (min 4) → Key Takeaways → FAQ (3-5 Q&A) → Conclusion with CTA
+- Minimum 900 words
+- Naturally integrate SEO keywords
+- Each H2 section: 2-3 paragraphs with real data cited inline
 
-HTML FORMATTING RULES:
-- Use <h1> for the main title only (1x)
-- Use <h2> for major sections
-- Use <h3> for subsections
-- Wrap paragraphs in <p>
-- Use <ul><li> for lists and bullet points
-- Use <strong> for key terms/statistics
-- Use <blockquote> for notable quotes or key stats
-- Add class="fosht-highlight" to blockquote and key stat paragraphs
-- NO inline styles, NO scripts
+HTML FORMATTING:
+- <h1> for main title (1x only)
+- <h2> for major sections
+- <h3> for subsections  
+- <p> for paragraphs
+- <ul><li> for lists
+- <strong> for key terms/statistics
+- <blockquote class="fosht-highlight"> for notable stats/quotes
+- NO inline styles, NO scripts, NO external links
 
-OUTPUT: A single JSON object:
-{
-  "html": "complete HTML blog content starting from <h1>..."
-}`,
+OUTPUT: JSON object only, no extra text:
+{"html": "complete HTML starting from <h1>..."}`,
     },
     {
       role: 'user',
-      content: `Write a full SEO blog post about: "${topic}"
+      content: `Write a complete SEO blog post about: "${topic}"
 
-Use this verified research data:
-- Topic Summary: ${researchData.topic_summary}
+Verified research data to use:
+- Summary: ${researchData.topic_summary}
 - Key Facts: ${researchData.key_facts?.join(' | ')}
-- Latest Trends: ${researchData.latest_trends?.join(' | ')}
+- Trends: ${researchData.latest_trends?.join(' | ')}  
 - Statistics: ${researchData.statistics?.join(' | ')}
+- SEO Title: ${researchData.seo_title}
 
-SEO Title to use: ${researchData.seo_title}`,
+Return only JSON: {"html": "..."}`,
     },
   ];
 
-  const result = await callGroq(messages, 'llama-3.3-70b-versatile', { type: 'json_object' }, keyIndex);
-  return JSON.parse(result.content);
+  const result = await callGroq({
+    messages,
+    model: 'llama-3.3-70b-versatile',
+    useJsonFormat: true,
+    startKeyIndex,
+  });
+
+  return extractJson(result.content);
 }
 
-// ── GENERATE GAMBAR GETIMG ──
+// ── GENERATE GAMBAR (GETIMG + Pollinations fallback) ──
 async function generateImage(keyword) {
-  const cleanKeyword = keyword?.substring(0, 60) || 'professional blog cover';
+  const cleanKeyword = (keyword || 'professional blog cover photo').substring(0, 60);
   const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-    `${cleanKeyword}, professional photography, cinematic, 4k`
-  )}?width=1200&height=630&nologo=true`;
+    `${cleanKeyword}, professional photography, cinematic lighting, 4k`
+  )}?width=1200&height=630&nologo=true&seed=${Date.now()}`;
 
   try {
     const apiKey = process.env.GETIMG_API_KEY_1;
-    if (!apiKey) return fallbackUrl;
+    if (!apiKey) {
+      console.log('[FOSHT] GETIMG_API_KEY_1 not set, using Pollinations fallback');
+      return fallbackUrl;
+    }
 
     const imgRes = await fetch('https://api.getimg.ai/v1/essential/text-to-image', {
       method: 'POST',
@@ -162,8 +233,8 @@ async function generateImage(keyword) {
         Accept: 'application/json',
       },
       body: JSON.stringify({
-        prompt: `Professional blog cover photo of ${cleanKeyword}, cinematic lighting, high quality, 4k, editorial style`,
-        negative_prompt: 'cartoon, anime, illustration, low quality, blurry, watermark, text overlay',
+        prompt: `Professional blog cover photo, ${cleanKeyword}, cinematic lighting, high quality, 4k, editorial photography`,
+        negative_prompt: 'cartoon, anime, illustration, low quality, blurry, watermark, text overlay, nsfw',
         style: 'photorealism',
         width: 1216,
         height: 832,
@@ -172,25 +243,30 @@ async function generateImage(keyword) {
     });
 
     const imgData = await imgRes.json();
-    if (imgData.image) return `data:image/webp;base64,${imgData.image}`;
+
+    if (imgData.image) {
+      return `data:image/webp;base64,${imgData.image}`;
+    }
+
+    console.warn('[FOSHT] GetImg returned no image:', imgData.error || 'unknown error');
     return fallbackUrl;
   } catch (e) {
-    console.error('GetImg failed, using fallback:', e.message);
+    console.warn('[FOSHT] GetImg failed, using Pollinations fallback:', e.message);
     return fallbackUrl;
   }
 }
 
-// ── CORS ──
+// ── CORS PREFLIGHT ──
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
 
-// ── MAIN HANDLER ──
+// ── MAIN POST HANDLER ──
 export async function POST(req) {
   const startTime = Date.now();
 
   try {
-    // ── AUTH: Validate API Key ──
+    // ── 1. AUTH ──
     const authHeader = req.headers.get('authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return new Response(
@@ -210,9 +286,7 @@ export async function POST(req) {
           validKeyRecord = record;
           break;
         }
-      } catch {
-        continue;
-      }
+      } catch { continue; }
     }
 
     if (!validKeyRecord) {
@@ -222,46 +296,75 @@ export async function POST(req) {
       );
     }
 
-    // ── PARSE REQUEST ──
-    const body = await req.json();
-    const { topic } = body;
-
-    if (!topic || typeof topic !== 'string' || topic.trim().length < 3) {
+    // ── 2. PARSE & VALIDASI BODY ──
+    let body;
+    try {
+      body = await req.json();
+    } catch {
       return new Response(
-        JSON.stringify({ success: false, error: 'Bad Request: "topic" field is required (min 3 chars)' }),
+        JSON.stringify({ success: false, error: 'Bad Request: Invalid JSON body' }),
         { status: 400, headers: corsHeaders }
       );
     }
 
-    const cleanTopic = topic.trim().substring(0, 300);
-    const randomKeyIndex = Math.floor(Math.random() * getGroqKeys().length);
+    const { topic } = body;
+    if (!topic || typeof topic !== 'string' || topic.trim().length < 3) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Bad Request: "topic" wajib diisi (min 3 karakter)' }),
+        { status: 400, headers: corsHeaders }
+      );
+    }
 
-    // ── PIPELINE: Research → Write → Image (parallelized where possible) ──
-    console.log(`[FOSHT] Generating blog for: "${cleanTopic}"`);
+    const cleanTopic = topic.trim().substring(0, 500);
+    const keys = getGroqKeys();
+    if (keys.length === 0) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Server Error: Tidak ada GROQ API key yang dikonfigurasi' }),
+        { status: 500, headers: corsHeaders }
+      );
+    }
 
-    // Fase 1: Riset real-time
-    const researchData = await researchTopic(cleanTopic, randomKeyIndex);
-    console.log(`[FOSHT] Research complete. SEO Title: "${researchData.seo_title}"`);
+    const startKeyIndex = Math.floor(Math.random() * keys.length);
+    console.log(`[FOSHT] ▶ Generating blog: "${cleanTopic}" | Keys available: ${keys.length}`);
 
-    // Fase 2: Tulis blog + generate gambar (paralel)
-    const [blogData, imageUrl] = await Promise.all([
-      writeBlog(cleanTopic, researchData, (randomKeyIndex + 1) % getGroqKeys().length),
-      generateImage(researchData.image_search_keyword),
-    ]);
+    // ── 3. FASE 1: RISET REAL-TIME ──
+    let researchData;
+    try {
+      researchData = await researchTopic(cleanTopic, startKeyIndex);
+      console.log(`[FOSHT] ✓ Research done. Title: "${researchData.seo_title}"`);
+    } catch (e) {
+      console.error('[FOSHT] ✗ Research phase failed:', e.message);
+      throw new Error(`Fase riset gagal: ${e.message}`);
+    }
+
+    // ── 4. FASE 2: TULIS BLOG + GAMBAR (paralel) ──
+    const nextKeyIndex = (startKeyIndex + 1) % keys.length;
+    let blogData, imageUrl;
+
+    try {
+      [blogData, imageUrl] = await Promise.all([
+        writeBlog(cleanTopic, researchData, nextKeyIndex),
+        generateImage(researchData.image_search_keyword),
+      ]);
+      console.log(`[FOSHT] ✓ Blog written. Image generated.`);
+    } catch (e) {
+      console.error('[FOSHT] ✗ Write/image phase failed:', e.message);
+      throw new Error(`Fase penulisan gagal: ${e.message}`);
+    }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`[FOSHT] Blog generated in ${elapsed}s for key: ${validKeyRecord.name}`);
+    console.log(`[FOSHT] ✅ Done in ${elapsed}s for plan: ${validKeyRecord.name}`);
 
-    // ── RESPONSE ──
+    // ── 5. RESPONSE ──
     return new Response(
       JSON.stringify({
         success: true,
         data: {
           plan: validKeyRecord.name,
           seo: {
-            title: researchData.seo_title,
-            metaDescription: researchData.meta_description,
-            slug: researchData.slug,
+            title: researchData.seo_title || cleanTopic,
+            metaDescription: researchData.meta_description || '',
+            slug: researchData.slug || cleanTopic.toLowerCase().replace(/\s+/g, '-'),
           },
           featuredImage: imageUrl,
           contentHtml: `<div class="fosht-article">${blogData.html}</div>`,
@@ -270,10 +373,14 @@ export async function POST(req) {
       }),
       { status: 200, headers: corsHeaders }
     );
+
   } catch (error) {
-    console.error('[FOSHT] Generation error:', error.message);
+    console.error('[FOSHT] ✗ Fatal error:', error.message);
     return new Response(
-      JSON.stringify({ success: false, error: error.message || 'Internal Server Error' }),
+      JSON.stringify({
+        success: false,
+        error: error.message || 'Internal Server Error',
+      }),
       { status: 500, headers: corsHeaders }
     );
   }
