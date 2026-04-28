@@ -14,6 +14,10 @@ const corsHeaders = {
 const getGroqKeys = () =>
   Array.from({ length: 12 }, (_, i) => process.env[`GROQ_API_KEY_${i + 1}`]).filter(Boolean);
 
+// ── GETIMG KEY ROTATOR (support hingga 12 keys) ──
+const getGetImgKeys = () =>
+  Array.from({ length: 12 }, (_, i) => process.env[`GETIMG_API_KEY_${i + 1}`]).filter(Boolean);
+
 // ── CORE GROQ CALLER dengan fallback antar key ──
 async function callGroq({ messages, model = 'llama-3.3-70b-versatile', useJsonFormat = false, startKeyIndex = 0 }) {
   const keys = getGroqKeys();
@@ -56,7 +60,6 @@ async function callGroq({ messages, model = 'llama-3.3-70b-versatile', useJsonFo
       // Handle error dari Groq
       if (data.error) {
         console.warn(`[GROQ] Key #${idx + 1} error: ${data.error.message}`);
-        // Jika model tidak tersedia, langsung throw bukan retry
         if (data.error.code === 'model_not_active' || data.error.type === 'invalid_request_error') {
           throw new Error(`Model "${model}" tidak tersedia: ${data.error.message}`);
         }
@@ -71,7 +74,6 @@ async function callGroq({ messages, model = 'llama-3.3-70b-versatile', useJsonFo
 
       return { content, keyUsed: idx };
     } catch (e) {
-      // Jika error fatal (bukan rate limit), lempar langsung
       if (e.message.includes('tidak tersedia') || e.message.includes('model_not_active')) throw e;
       console.warn(`[GROQ] Key #${idx + 1} threw: ${e.message}`);
       if (attempt === keys.length - 1) throw new Error(`Semua ${keys.length} GROQ key gagal. Error terakhir: ${e.message}`);
@@ -81,18 +83,15 @@ async function callGroq({ messages, model = 'llama-3.3-70b-versatile', useJsonFo
   throw new Error(`Semua ${keys.length} GROQ key exhausted tanpa hasil`);
 }
 
-// ── PARSE JSON DARI TEKS (untuk model yang tidak support response_format) ──
+// ── PARSE JSON DARI TEKS ──
 function extractJson(raw) {
-  // Coba parse langsung dulu
   try { return JSON.parse(raw); } catch (_) {}
 
-  // Cari blok ```json ... ``` 
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) {
     try { return JSON.parse(fenced[1].trim()); } catch (_) {}
   }
 
-  // Cari objek JSON paling luar { ... }
   const firstBrace = raw.indexOf('{');
   const lastBrace = raw.lastIndexOf('}');
   if (firstBrace !== -1 && lastBrace !== -1) {
@@ -113,7 +112,7 @@ Your job: gather REAL, CURRENT, FACTUAL information about the given topic from t
 RULES:
 - Search for latest data, statistics, trends, and facts
 - Collect at least 5 concrete data points or real statistics with numbers
-- Find recent news or developments (within last 12 months if possible)  
+- Find recent news or developments (within last 12 months if possible)
 - NEVER fabricate or assume any data — only use what you actually find
 - Output ONLY a valid JSON object, no markdown formatting, no explanation outside JSON
 
@@ -123,7 +122,7 @@ REQUIRED OUTPUT FORMAT (strict JSON, no extra text):
   "key_facts": ["fact 1 with context", "fact 2", "fact 3", "fact 4", "fact 5"],
   "latest_trends": ["trend 1", "trend 2", "trend 3"],
   "statistics": ["stat with real number 1", "stat 2", "stat 3"],
-  "image_search_keyword": "WAJIB: 4-6 kata bahasa Inggris yang SANGAT SPESIFIK ke topik (contoh untuk 'restoran vegan jakarta': 'vegan food jakarta restaurant plate'), BUKAN kata umum seperti 'city', 'space', 'abstract'",
+  "image_search_keyword": "WAJIB: 4-6 kata bahasa Inggris SANGAT SPESIFIK ke topik (contoh 'restoran vegan jakarta' -> 'vegan food jakarta restaurant plate'), BUKAN kata umum seperti 'city', 'space', 'abstract', 'technology'",
   "seo_title": "SEO-optimized blog title max 60 chars",
   "meta_description": "SEO meta description max 160 chars",
   "slug": "url-friendly-slug"
@@ -135,17 +134,15 @@ REQUIRED OUTPUT FORMAT (strict JSON, no extra text):
     },
   ];
 
-  // compound-beta punya built-in web search — tidak support response_format
   let result;
   try {
     result = await callGroq({
       messages,
       model: 'compound-beta',
-      useJsonFormat: false, // compound-beta tidak support ini
+      useJsonFormat: false,
       startKeyIndex,
     });
   } catch (e) {
-    // Fallback: gunakan llama biasa jika compound-beta tidak tersedia di akun
     console.warn(`[FOSHT] compound-beta gagal (${e.message}), fallback ke llama-3.3-70b...`);
     result = await callGroq({
       messages,
@@ -176,7 +173,7 @@ WRITING RULES:
 HTML FORMATTING:
 - <h1> for main title (1x only)
 - <h2> for major sections
-- <h3> for subsections  
+- <h3> for subsections
 - <p> for paragraphs
 - <ul><li> for lists
 - <strong> for key terms/statistics
@@ -193,7 +190,7 @@ OUTPUT: JSON object only, no extra text:
 Verified research data to use:
 - Summary: ${researchData.topic_summary}
 - Key Facts: ${researchData.key_facts?.join(' | ')}
-- Trends: ${researchData.latest_trends?.join(' | ')}  
+- Trends: ${researchData.latest_trends?.join(' | ')}
 - Statistics: ${researchData.statistics?.join(' | ')}
 - SEO Title: ${researchData.seo_title}
 
@@ -211,48 +208,84 @@ Return only JSON: {"html": "..."}`,
   return extractJson(result.content);
 }
 
-// ── GENERATE GAMBAR (GETIMG + Pollinations fallback) ──
+// ── GENERATE GAMBAR (GetImg 12 key → Unsplash → Pexels → Pollinations) ──
 async function generateImage(keyword, topic = '') {
-  // Gabungkan keyword + topik asli supaya lebih relevan
   const base = keyword || topic || 'professional blog cover';
   const cleanKeyword = base.substring(0, 80);
-
-  // Prompt yang sangat spesifik agar tidak melenceng
-  const imagePrompt = `${cleanKeyword}, professional food photography, high quality, editorial style, 4k, bright natural lighting`;
+  const imagePrompt = `${cleanKeyword}, professional photography, high quality, editorial style, 4k, bright natural lighting`;
   const negativePrompt = 'space, galaxy, earth, abstract, dark, cartoon, anime, low quality, blurry, watermark, text';
 
-  const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(imagePrompt)}?width=1200&height=630&nologo=true&seed=${Date.now()}`;
+  // ── COBA SEMUA GETIMG KEYS (1 → 12) ──
+  const getimgKeys = getGetImgKeys();
+  for (let i = 0; i < getimgKeys.length; i++) {
+    try {
+      const imgRes = await fetch('https://api.getimg.ai/v1/essential/text-to-image', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${getimgKeys[i]}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: imagePrompt,
+          negative_prompt: negativePrompt,
+          style: 'photorealism',
+          width: 1216,
+          height: 832,
+          output_format: 'webp',
+        }),
+      });
 
-  try {
-    const apiKey = process.env.GETIMG_API_KEY_1;
-    if (!apiKey) return fallbackUrl;
-
-    const imgRes = await fetch('https://api.getimg.ai/v1/essential/text-to-image', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        prompt: imagePrompt, 
-        negative_prompt: negativePrompt,
-        style: 'photorealism',
-        width: 1216,
-        height: 832,
-        output_format: 'webp',
-      }),
-    });
-
-    const imgData = await imgRes.json();
-    if (imgData.image) return `data:image/webp;base64,${imgData.image}`;
-
-    console.warn('[FOSHT] GetImg no image:', imgData.error || 'unknown');
-    return fallbackUrl;
-  } catch (e) {
-    console.warn('[FOSHT] GetImg failed:', e.message);
-    return fallbackUrl;
+      const imgData = await imgRes.json();
+      if (imgData.image) {
+        console.log(`[FOSHT] ✓ Image from GetImg key #${i + 1}`);
+        return `data:image/webp;base64,${imgData.image}`;
+      }
+      console.warn(`[FOSHT] GetImg key #${i + 1} failed: ${imgData.error?.message || 'no image'}`);
+    } catch (e) {
+      console.warn(`[FOSHT] GetImg key #${i + 1} threw: ${e.message}`);
+    }
   }
+
+  // ── FALLBACK 1: UNSPLASH ──
+  try {
+    const unsplashKey = process.env.UNSPLASH_ACCESS_KEY;
+    if (unsplashKey) {
+      const res = await fetch(
+        `https://api.unsplash.com/photos/random?query=${encodeURIComponent(cleanKeyword)}&orientation=landscape&content_filter=high`,
+        { headers: { Authorization: `Client-ID ${unsplashKey}` } }
+      );
+      const data = await res.json();
+      if (data.urls?.regular) {
+        console.log('[FOSHT] ✓ Image from Unsplash');
+        return data.urls.regular;
+      }
+    }
+  } catch (e) {
+    console.warn('[FOSHT] Unsplash failed:', e.message);
+  }
+
+  // ── FALLBACK 2: PEXELS ──
+  try {
+    const pexelsKey = process.env.PEXELS_API_KEY;
+    if (pexelsKey) {
+      const res = await fetch(
+        `https://api.pexels.com/v1/search?query=${encodeURIComponent(cleanKeyword)}&per_page=1&orientation=landscape`,
+        { headers: { Authorization: pexelsKey } }
+      );
+      const data = await res.json();
+      if (data.photos?.[0]?.src?.large2x) {
+        console.log('[FOSHT] ✓ Image from Pexels');
+        return data.photos[0].src.large2x;
+      }
+    }
+  } catch (e) {
+    console.warn('[FOSHT] Pexels failed:', e.message);
+  }
+
+  // ── FALLBACK TERAKHIR: POLLINATIONS ──
+  console.warn('[FOSHT] All image sources failed, using Pollinations');
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(imagePrompt)}?width=1200&height=630&nologo=true&seed=${Date.now()}`;
 }
 
 // ── CORS PREFLIGHT ──
@@ -315,16 +348,16 @@ export async function POST(req) {
     }
 
     const cleanTopic = topic.trim().substring(0, 500);
-    const keys = getGroqKeys();
-    if (keys.length === 0) {
+    const groqKeys = getGroqKeys();
+    if (groqKeys.length === 0) {
       return new Response(
         JSON.stringify({ success: false, error: 'Server Error: Tidak ada GROQ API key yang dikonfigurasi' }),
         { status: 500, headers: corsHeaders }
       );
     }
 
-    const startKeyIndex = Math.floor(Math.random() * keys.length);
-    console.log(`[FOSHT] ▶ Generating blog: "${cleanTopic}" | Keys available: ${keys.length}`);
+    const startKeyIndex = Math.floor(Math.random() * groqKeys.length);
+    console.log(`[FOSHT] ▶ Generating blog: "${cleanTopic}" | GROQ keys: ${groqKeys.length} | GetImg keys: ${getGetImgKeys().length}`);
 
     // ── 3. FASE 1: RISET REAL-TIME ──
     let researchData;
@@ -337,7 +370,7 @@ export async function POST(req) {
     }
 
     // ── 4. FASE 2: TULIS BLOG + GAMBAR (paralel) ──
-    const nextKeyIndex = (startKeyIndex + 1) % keys.length;
+    const nextKeyIndex = (startKeyIndex + 1) % groqKeys.length;
     let blogData, imageUrl;
 
     try {
