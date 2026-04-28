@@ -123,7 +123,7 @@ REQUIRED OUTPUT FORMAT (strict JSON, no extra text):
   "key_facts": ["fact 1 with context", "fact 2", "fact 3", "fact 4", "fact 5"],
   "latest_trends": ["trend 1", "trend 2", "trend 3"],
   "statistics": ["stat with real number 1", "stat 2", "stat 3"],
-  "image_search_keyword": "3-5 English words for image generation",
+  "image_search_keyword": "WAJIB: 4-6 kata bahasa Inggris yang SANGAT SPESIFIK ke topik (contoh untuk 'restoran vegan jakarta': 'vegan food jakarta restaurant plate'), BUKAN kata umum seperti 'city', 'space', 'abstract'",
   "seo_title": "SEO-optimized blog title max 60 chars",
   "meta_description": "SEO meta description max 160 chars",
   "slug": "url-friendly-slug"
@@ -212,18 +212,20 @@ Return only JSON: {"html": "..."}`,
 }
 
 // ── GENERATE GAMBAR (GETIMG + Pollinations fallback) ──
-async function generateImage(keyword) {
-  const cleanKeyword = (keyword || 'professional blog cover photo').substring(0, 60);
-  const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-    `${cleanKeyword}, professional photography, cinematic lighting, 4k`
-  )}?width=1200&height=630&nologo=true&seed=${Date.now()}`;
+async function generateImage(keyword, topic = '') {
+  // Gabungkan keyword + topik asli supaya lebih relevan
+  const base = keyword || topic || 'professional blog cover';
+  const cleanKeyword = base.substring(0, 80);
+
+  // Prompt yang sangat spesifik agar tidak melenceng
+  const imagePrompt = `${cleanKeyword}, professional food photography, high quality, editorial style, 4k, bright natural lighting`;
+  const negativePrompt = 'space, galaxy, earth, abstract, dark, cartoon, anime, low quality, blurry, watermark, text';
+
+  const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(imagePrompt)}?width=1200&height=630&nologo=true&seed=${Date.now()}`;
 
   try {
     const apiKey = process.env.GETIMG_API_KEY_1;
-    if (!apiKey) {
-      console.log('[FOSHT] GETIMG_API_KEY_1 not set, using Pollinations fallback');
-      return fallbackUrl;
-    }
+    if (!apiKey) return fallbackUrl;
 
     const imgRes = await fetch('https://api.getimg.ai/v1/essential/text-to-image', {
       method: 'POST',
@@ -233,8 +235,8 @@ async function generateImage(keyword) {
         Accept: 'application/json',
       },
       body: JSON.stringify({
-        prompt: `Professional blog cover photo, ${cleanKeyword}, cinematic lighting, high quality, 4k, editorial photography`,
-        negative_prompt: 'cartoon, anime, illustration, low quality, blurry, watermark, text overlay, nsfw',
+        prompt: imagePrompt, 
+        negative_prompt: negativePrompt,
         style: 'photorealism',
         width: 1216,
         height: 832,
@@ -243,15 +245,12 @@ async function generateImage(keyword) {
     });
 
     const imgData = await imgRes.json();
+    if (imgData.image) return `data:image/webp;base64,${imgData.image}`;
 
-    if (imgData.image) {
-      return `data:image/webp;base64,${imgData.image}`;
-    }
-
-    console.warn('[FOSHT] GetImg returned no image:', imgData.error || 'unknown error');
+    console.warn('[FOSHT] GetImg no image:', imgData.error || 'unknown');
     return fallbackUrl;
   } catch (e) {
-    console.warn('[FOSHT] GetImg failed, using Pollinations fallback:', e.message);
+    console.warn('[FOSHT] GetImg failed:', e.message);
     return fallbackUrl;
   }
 }
@@ -344,7 +343,7 @@ export async function POST(req) {
     try {
       [blogData, imageUrl] = await Promise.all([
         writeBlog(cleanTopic, researchData, nextKeyIndex),
-        generateImage(researchData.image_search_keyword),
+        generateImage(researchData.image_search_keyword, cleanTopic),
       ]);
       console.log(`[FOSHT] ✓ Blog written. Image generated.`);
     } catch (e) {
