@@ -1,10 +1,6 @@
 import prisma from '../../../../lib/prisma';
 import { decryptApiKey } from '../../../../lib/encryption';
 
-/**
- * ── KONFIGURASI CORS ──
- * Memastikan API bisa dipanggil dari domain mana pun (Cross-Origin).
- */
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -13,25 +9,17 @@ const corsHeaders = {
 };
 
 export async function OPTIONS() {
-  return new Response(null, {
-    status: 204,
-    headers: corsHeaders,
-  });
+  return new Response(null, { status: 204, headers: corsHeaders });
 }
 
 export async function POST(req) {
   try {
     const authHeader = req.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: 'Unauthorized: API Key tidak tersedia.' 
-      }), { status: 401, headers: corsHeaders });
+      return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
     }
 
     const providedKey = authHeader.split(' ')[1];
-
-    // 1. VALIDASI & DEKRIPSI API KEY
     const allKeys = await prisma.apiKey.findMany({ where: { isActive: true } });
     let validKeyRecord = null;
 
@@ -45,35 +33,12 @@ export async function POST(req) {
       } catch (e) { continue; }
     }
 
-    if (!validKeyRecord) {
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: 'API Key tidak valid atau telah dinonaktifkan.' 
-      }), { status: 401, headers: corsHeaders });
-    }
-
-    // 2. AMBIL KONFIGURASI USER DARI DATABASE
-    const userConfig = await prisma.user.findUnique({ 
-      where: { id: validKeyRecord.userId } 
-    });
+    if (!validKeyRecord) return new Response(JSON.stringify({ success: false, error: 'Key Invalid' }), { status: 401, headers: corsHeaders });
 
     const body = await req.json();
-    const { topic, keywords } = body;
+    const { topic: instruction } = body;
 
-    if (!topic) {
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: 'Topik artikel wajib diisi.' 
-      }), { status: 400, headers: corsHeaders });
-    }
-
-    // 3. GENERATE TEKS VIA GROQ (Llama 3.1)
-    // Menggunakan System Prompt yang ketat agar HTML bersih
-    const systemPrompt = `Kamu adalah Penulis SEO FOSHT AI. 
-    ATURAN KONTEN: HANYA gunakan tag <h1>, <h2>, <p>, <ul>, <li>. 
-    DILARANG: Tag <html>, <head>, <body>, <link>, <script>, atau <style>. 
-    Berikan output artikel yang mendalam dan profesional.`;
-
+    // ── PERBAIKAN SYSTEM PROMPT AGAR AI TIDAK HALUSINASI ──
     const groqKeys = [process.env.GROQ_API_KEY_1, process.env.GROQ_API_KEY_2].filter(Boolean);
     const activeGroqKey = groqKeys[Math.floor(Math.random() * groqKeys.length)];
 
@@ -86,63 +51,63 @@ export async function POST(req) {
       body: JSON.stringify({
         model: 'llama-3.1-8b-instant',
         messages: [
-          { role: 'system', content: systemPrompt }, 
-          { role: 'user', content: `Tulis artikel HTML murni tentang: ${topic}. Keywords: ${keywords || 'umum'}.` }
+          { 
+            role: 'system', 
+            content: `Kamu adalah FOSHT Agent AI Serbaguna. 
+            TUGAS: Jalankan instruksi user dan hasilkan artikel/tulisan yang relevan.
+            
+            ATURAN OUTPUT:
+            1. JANGAN JADIKAN INSTRUKSI USER SEBAGAI JUDUL. Buatlah judul baru yang kreatif.
+            2. "image_prompt": Berikan HANYA 3 kata kunci visual bahasa Inggris (Contoh: "vegan food jakarta"). JANGAN berikan kalimat panjang.
+            3. "html": Tuliskan hasil tugasmu dalam format HTML (<h1>, <h2>, <p>).
+            4. FORMAT: Harus JSON murni: {"image_prompt": "...", "html": "..."}` 
+          }, 
+          { role: 'user', content: `Instruksi: ${instruction}` }
         ],
-        temperature: 0.7,
+        response_format: { type: "json_object" },
+        temperature: 0.8,
       })
     });
 
     const groqData = await groqResponse.json();
-    let cleanHtml = groqData.choices[0].message.content;
-    // Membersihkan jika AI masih nakal memberikan tag markdown atau tag head
-    cleanHtml = cleanHtml.replace(/```html/g, '').replace(/```/g, '').replace(/<head>[\s\S]*?<\/head>/gi, '').replace(/<link[^>]*>/gi, '');
+    let aiRaw = groqData.choices[0].message.content;
+    aiRaw = aiRaw.replace(/```json/g, '').replace(/```/g, '').trim();
+    const aiResponse = JSON.parse(aiRaw);
 
-    // 4. GENERATE GAMBAR VIA GETIMG.AI (Premium)
-    let imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(topic)}?nologo=true`; // Fallback ke Pollinations
+    // ── GENERATE GAMBAR DENGAN PROMPT SINGKAT ──
+    const finalImageKeyword = aiResponse.image_prompt.substring(0, 50);
+    let imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(finalImageKeyword)}?width=1024&height=512&nologo=true`;
 
     try {
-      const getImgKey = process.env.GETIMG_API_KEY_1;
-      if (getImgKey) {
-        const imgResponse = await fetch('https://api.getimg.ai/v1/essential/text-to-image', {
+      if (process.env.GETIMG_API_KEY_1) {
+        const imgRes = await fetch('https://api.getimg.ai/v1/essential/text-to-image', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${getImgKey}`,
+            'Authorization': `Bearer ${process.env.GETIMG_API_KEY_1}`,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
           },
           body: JSON.stringify({
-            prompt: `Cinematic professional digital art for blog header about ${topic}, detailed, 4k, clean composition, no text overlay`,
-            style: 'digital-art',
-            output_format: 'webp',
-            width: 1024,
-            height: 512
+            prompt: `Professional photography of ${finalImageKeyword}, cinematic lighting, high quality, 4k`,
+            style: 'photorealism',
+            output_format: 'webp'
           })
         });
-        
-        const imgData = await imgResponse.json();
-        if (imgData.image) {
-          imageUrl = `data:image/webp;base64,${imgData.image}`;
-        }
+        const imgData = await imgRes.json();
+        if (imgData.image) imageUrl = `data:image/webp;base64,${imgData.image}`;
       }
-    } catch (imgError) {
-      console.error("GetImg API Gagal:", imgError.message);
-    }
+    } catch (e) { console.error("GetImg Fallback used"); }
 
-    // 5. RESPONSE FINAL (MATANG & SIAP PAKAI)
     return new Response(JSON.stringify({
       success: true,
       data: {
         plan: validKeyRecord.name, 
         featuredImage: imageUrl, 
-        contentHtml: `<div class="fosht-article">${cleanHtml}</div>` 
+        contentHtml: `<div class="fosht-article">${aiResponse.html}</div>` 
       }
     }), { status: 200, headers: corsHeaders });
 
   } catch (error) {
-    return new Response(JSON.stringify({ 
-      success: false, 
-      error: `Internal Server Error: ${error.message}` 
-    }), { status: 500, headers: corsHeaders });
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: corsHeaders });
   }
 }
